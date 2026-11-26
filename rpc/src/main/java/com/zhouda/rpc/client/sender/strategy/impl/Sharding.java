@@ -1,0 +1,127 @@
+/*
+ * Copyright (C) 2020 ZhoudaRpc LLC.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package com.zhouda.rpc.client.sender.strategy.impl;
+
+import com.zhouda.rpc.async.callback.Callback;
+import com.zhouda.rpc.common.annotation.ExposedInternals;
+import com.zhouda.rpc.common.builder.AbstractBuilder;
+import com.zhouda.rpc.client.RpcClientConnectionPool;
+import com.zhouda.rpc.client.sender.RpcSender;
+import com.zhouda.rpc.client.sender.Utils;
+import com.zhouda.rpc.client.sender.strategy.RpcStrategy;
+import com.zhouda.rpc.protocol.RpcException;
+import org.jetbrains.annotations.Nullable;
+
+import java.net.InetSocketAddress;
+import java.util.List;
+import java.util.Set;
+import java.util.function.ToIntFunction;
+
+import static com.zhouda.rpc.client.sender.Utils.listOfNullableSenders;
+
+@ExposedInternals
+public final class Sharding implements RpcStrategy {
+	public final List<? extends RpcStrategy> list;
+	public final ToIntFunction<?> shardingFunction;
+	public int minActiveSubStrategies;
+
+	public Sharding(ToIntFunction<?> shardingFunction, List<? extends RpcStrategy> list, int minActiveSubStrategies) {
+		this.shardingFunction = shardingFunction;
+		this.list = list;
+		this.minActiveSubStrategies = minActiveSubStrategies;
+	}
+
+	public static <T> Sharding create(ToIntFunction<T> shardingFunction, RpcStrategy... strategies) {
+		return builder(shardingFunction, strategies).build();
+	}
+
+	public static <T> Sharding create(ToIntFunction<T> shardingFunction, List<? extends RpcStrategy> strategies) {
+		return builder(shardingFunction, strategies).build();
+	}
+
+	public static <T> Builder builder(ToIntFunction<T> shardingFunction, RpcStrategy... strategies) {
+		return builder(shardingFunction, List.of(strategies));
+	}
+
+	public static <T> Builder builder(ToIntFunction<T> shardingFunction, List<? extends RpcStrategy> strategies) {
+		return new Sharding(shardingFunction, strategies, 0).new Builder();
+	}
+
+	public final class Builder extends AbstractBuilder<Builder, Sharding> {
+		private Builder() {}
+
+		public Builder withMinActiveSubStrategies(int minActiveSubStrategies) {
+			checkNotBuilt(this);
+			Sharding.this.minActiveSubStrategies = minActiveSubStrategies;
+			return this;
+		}
+
+		@Override
+		protected Sharding doBuild() {
+			return Sharding.this;
+		}
+	}
+
+	@Override
+	public Set<InetSocketAddress> getAddresses() {
+		return Utils.getAddresses(list);
+	}
+
+	@Override
+	public @Nullable RpcSender createSender(RpcClientConnectionPool pool) {
+		List<RpcSender> subSenders = listOfNullableSenders(list, pool);
+		int activeSenders = 0;
+		for (RpcSender subSender : subSenders) {
+			if (subSender != null) {
+				activeSenders++;
+			}
+		}
+		if (activeSenders < minActiveSubStrategies)
+			return null;
+		if (subSenders.isEmpty())
+			return null;
+		if (subSenders.size() == 1)
+			return subSenders.get(0);
+		return new Sender(shardingFunction, subSenders);
+	}
+
+	public static final class Sender implements RpcSender {
+		static final RpcException NO_SENDER_AVAILABLE_EXCEPTION = new RpcException("No senders available");
+
+		private final ToIntFunction<Object> shardingFunction;
+		private final RpcSender[] subSenders;
+
+		Sender(ToIntFunction<?> shardingFunction, List<RpcSender> senders) {
+			assert !senders.isEmpty();
+			//noinspection unchecked
+			this.shardingFunction = (ToIntFunction<Object>) shardingFunction;
+			this.subSenders = senders.toArray(new RpcSender[0]);
+		}
+
+		@Override
+		public <I, O> void sendRequest(I request, int timeout, Callback<O> cb) {
+			int shardIndex = shardingFunction.applyAsInt(request);
+			RpcSender sender = subSenders[shardIndex];
+			if (sender != null) {
+				sender.sendRequest(request, timeout, cb);
+			} else {
+				cb.accept(null, NO_SENDER_AVAILABLE_EXCEPTION);
+			}
+		}
+
+	}
+}

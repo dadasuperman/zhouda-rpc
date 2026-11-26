@@ -1,0 +1,80 @@
+/*
+ * Copyright (C) 2020 ZhoudaRpc LLC.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package com.zhouda.rpc.datastream.stats;
+
+import com.zhouda.rpc.csp.consumer.ChannelConsumer;
+import com.zhouda.rpc.csp.process.transformer.ChannelConsumerTransformer;
+import com.zhouda.rpc.csp.process.transformer.ChannelSupplierTransformer;
+import com.zhouda.rpc.csp.supplier.ChannelSupplier;
+import com.zhouda.rpc.datastream.consumer.StreamConsumer;
+import com.zhouda.rpc.datastream.processor.transformer.StreamConsumerTransformer;
+import com.zhouda.rpc.datastream.processor.transformer.StreamSupplierTransformer;
+import com.zhouda.rpc.datastream.supplier.StreamDataAcceptor;
+import com.zhouda.rpc.datastream.supplier.StreamSupplier;
+
+public interface StreamStats<T> extends
+	StreamSupplierTransformer<T, StreamSupplier<T>>, StreamConsumerTransformer<T, StreamConsumer<T>>,
+	ChannelSupplierTransformer<T, ChannelSupplier<T>>, ChannelConsumerTransformer<T, ChannelConsumer<T>> {
+
+	StreamDataAcceptor<T> createDataAcceptor(StreamDataAcceptor<T> actualDataAcceptor);
+
+	void onStarted();
+
+	void onResume();
+
+	void onSuspend();
+
+	void onEndOfStream();
+
+	void onError(Exception e);
+
+	@Override
+	default StreamConsumer<T> transform(StreamConsumer<T> consumer) {
+		return consumer.transformWith(StreamStatsForwarder.create(this));
+	}
+
+	@Override
+	default StreamSupplier<T> transform(StreamSupplier<T> supplier) {
+		return supplier.transformWith(StreamStatsForwarder.create(this));
+	}
+
+	@Override
+	default ChannelSupplier<T> transform(ChannelSupplier<T> supplier) {
+		return supplier; // TODO
+	}
+
+	@Override
+	default ChannelConsumer<T> transform(ChannelConsumer<T> consumer) {
+		return consumer; // TODO
+	}
+
+	static <T> BasicStreamStats<T> basic() {
+		return new BasicStreamStats<>();
+	}
+
+	static <T> BasicStreamStats<T>.Builder basicBuilder() {
+		return new BasicStreamStats<T>().new Builder();
+	}
+
+	static <T> DetailedStreamStats<T> detailed() {
+		return new DetailedStreamStats<>();
+	}
+
+	static <T> DetailedStreamStats<T>.Builder detailedBuilder() {
+		return new DetailedStreamStats<T>().new Builder();
+	}
+}

@@ -1,0 +1,176 @@
+/*
+ * Copyright (C) 2020 ZhoudaRpc LLC.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package com.zhouda.rpc.csp.queue;
+
+import com.zhouda.rpc.async.process.AsyncCloseable;
+import com.zhouda.rpc.bytebuf.ByteBuf;
+import com.zhouda.rpc.common.Checks;
+import com.zhouda.rpc.common.MemSize;
+import com.zhouda.rpc.common.tuple.Tuple2;
+import com.zhouda.rpc.csp.file.ChannelFileReader;
+import com.zhouda.rpc.csp.file.ChannelFileWriter;
+import com.zhouda.rpc.promise.Promise;
+import com.zhouda.rpc.promise.SettablePromise;
+import com.zhouda.rpc.reactor.ImplicitlyReactive;
+import com.zhouda.rpc.reactor.Reactor;
+import org.jetbrains.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.IOException;
+import java.nio.channels.FileChannel;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.concurrent.Executor;
+
+import static com.zhouda.rpc.reactor.Reactive.checkInReactorThread;
+import static java.nio.file.StandardOpenOption.*;
+
+public final class ChannelFileBuffer extends ImplicitlyReactive implements ChannelQueue<ByteBuf> {
+	private static final Logger logger = LoggerFactory.getLogger(ChannelFileBuffer.class);
+	private static final boolean CHECKS = Checks.isEnabled(ChannelFileBuffer.class);
+
+	private final ChannelFileReader reader;
+	private final ChannelFileWriter writer;
+	private final Executor executor;
+	private final Path path;
+
+	private @Nullable SettablePromise<ByteBuf> take;
+
+	private boolean finished = false;
+
+	private @Nullable Exception exception;
+
+	private @Nullable AsyncCloseable closeable;
+
+	private ChannelFileBuffer(ChannelFileReader reader, ChannelFileWriter writer, Executor executor, Path path) {
+		this.reader = reader;
+		this.writer = writer;
+		this.executor = executor;
+		this.path = path;
+	}
+
+	public static Promise<ChannelFileBuffer> create(Executor executor, Path filePath) {
+		return create(executor, filePath, null);
+	}
+
+	public static Promise<ChannelFileBuffer> create(Executor executor, Path path, @Nullable MemSize limit) {
+		return Promise.ofBlocking(executor,
+				() -> {
+					Files.createDirectories(path.getParent());
+					FileChannel writerChannel = FileChannel.open(path, CREATE, WRITE);
+					FileChannel readerChannel = FileChannel.open(path, CREATE, READ);
+					return new Tuple2<>(writerChannel, readerChannel);
+				})
+			.map(tuple2 -> {
+				Reactor reactor = Reactor.getCurrentReactor();
+				ChannelFileWriter writer = ChannelFileWriter.create(reactor, executor, tuple2.value1());
+				ChannelFileReader.Builder readerBuilder = ChannelFileReader.builder(reactor, executor, tuple2.value2());
+				if (limit != null) {
+					readerBuilder.withLimit(limit.toLong());
+				}
+				ChannelFileReader reader = readerBuilder.build();
+				return new ChannelFileBuffer(reader, writer, executor, path);
+			});
+	}
+
+	public void setCloseable(@Nullable AsyncCloseable closeable) {
+		this.closeable = closeable;
+	}
+
+	@Override
+	public Promise<Void> put(@Nullable ByteBuf item) {
+		if (CHECKS) checkInReactorThread(this);
+		if (exception != null) {
+			return Promise.ofException(exception);
+		}
+		if (item == null) {
+			finished = true;
+		}
+		if (take == null) {
+			return writer.accept(item);
+		}
+		SettablePromise<ByteBuf> promise = take;
+		take = null;
+		promise.set(item);
+		return item == null ?
+			writer.accept(null) :
+			Promise.complete();
+	}
+
+	@Override
+	public Promise<ByteBuf> take() {
+		if (CHECKS) checkInReactorThread(this);
+		if (exception != null) {
+			return Promise.ofException(exception);
+		}
+		if (!isExhausted()) {
+			return reader.get();
+		}
+		if (finished) {
+			return Promise.of(null);
+		}
+		SettablePromise<ByteBuf> promise = new SettablePromise<>();
+		take = promise;
+		return promise;
+	}
+
+	@Override
+	public boolean isSaturated() {
+		return false;
+	}
+
+	@Override
+	public boolean isExhausted() {
+		return reader.getPosition() >= writer.getPosition();
+	}
+
+	@Override
+	public void closeEx(Exception e) {
+		checkInReactorThread(this);
+		if (exception != null) {
+			return;
+		}
+		exception = e;
+		writer.closeEx(e);
+		reader.closeEx(e);
+
+		if (take != null) {
+			take.setException(e);
+			take = null;
+		}
+
+		// each queue should operate on files with unique names
+		// to avoid races due to this
+		executor.execute(() -> {
+			try {
+				Files.deleteIfExists(path);
+			} catch (IOException io) {
+				logger.error("Failed to cleanup channel buffer file {}", path, io);
+			}
+		});
+
+		if (closeable != null) {
+			closeable.closeEx(e);
+			closeable = null;
+		}
+	}
+
+	public @Nullable Exception getException() {
+		return exception;
+	}
+}

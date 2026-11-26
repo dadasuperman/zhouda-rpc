@@ -1,0 +1,168 @@
+/*
+ * Copyright (C) 2020 ZhoudaRpc LLC.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ * http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package com.zhouda.rpc.common.exception;
+
+import com.zhouda.rpc.common.annotation.StaticFactories;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.PrintStream;
+import java.util.function.Predicate;
+
+/**
+ * Utility methods that allow to handle fatal errors using thread-specific handlers
+ */
+@StaticFactories(FatalErrorHandler.class)
+public class FatalErrorHandlers {
+	static volatile FatalErrorHandler globalFatalErrorHandler = rethrow();
+
+	static final ThreadLocal<FatalErrorHandler> CURRENT_HANDLER = new ThreadLocal<>();
+
+	/**
+	 * A fatal error handler that simply ignores all received errors
+	 */
+	public static FatalErrorHandler ignore() {
+		return (e, context) -> {};
+	}
+
+	/**
+	 * A fatal error handler that terminates JVM on any {@link Throwable}
+	 */
+	public static FatalErrorHandler halt() {
+		return haltOn(t -> true);
+	}
+
+	/**
+	 * A fatal error handler that terminates JVM on any {@link Error}
+	 */
+	public static FatalErrorHandler haltOnError() {
+		return haltOn(e -> e instanceof Error);
+	}
+
+	/**
+	 * A fatal error handler that terminates JVM on any {@link VirtualMachineError}
+	 */
+	public static FatalErrorHandler haltOnVirtualMachineError() {
+		return haltOn(e -> e instanceof VirtualMachineError);
+	}
+
+	/**
+	 * A fatal error handler that terminates JVM on any {@link OutOfMemoryError}
+	 */
+	public static FatalErrorHandler haltOnOutOfMemoryError() {
+		return haltOn(e -> e instanceof OutOfMemoryError);
+	}
+
+	/**
+	 * A fatal error handler that terminates JVM on any error that matches
+	 * a given predicate
+	 *
+	 * @param predicate a predicate that tests a received error
+	 */
+	public static FatalErrorHandler haltOn(Predicate<Throwable> predicate) {
+		return (e, context) -> {
+			if (predicate.test(e)) {
+				Runtime.getRuntime().halt(1);
+			}
+		};
+	}
+
+	/**
+	 * A fatal error handler that rethrows any error it receives
+	 */
+	public static FatalErrorHandler rethrow() {
+		return rethrowOn(t -> true);
+	}
+
+	/**
+	 * A fatal error handler that rethrows any error that matches
+	 * a given predicate
+	 *
+	 * @param predicate a predicate that tests a received error
+	 */
+	public static FatalErrorHandler rethrowOn(Predicate<Throwable> predicate) {
+		return (e, context) -> {
+			if (predicate.test(e)) {
+				if (e instanceof RuntimeException) {
+					throw (RuntimeException) e;
+				} else if (e instanceof Error) {
+					throw (Error) e;
+				} else {
+					throw new Error(e);
+				}
+			}
+		};
+	}
+
+	/**
+	 * A fatal error handler that logs all errors to an internal {@link Logger}
+	 */
+	public static FatalErrorHandler logging() {
+		return loggingTo(LoggerFactory.getLogger(FatalErrorHandler.class));
+	}
+
+	/**
+	 * A fatal error handler that logs all errors to a given {@link Logger}
+	 *
+	 * @param logger a logger to log all the received errors
+	 */
+	public static FatalErrorHandler loggingTo(Logger logger) {
+		return (e, context) -> {
+			if (!logger.isErrorEnabled()) return;
+
+			if (context == null) {
+				logger.error("Fatal error", e);
+			} else {
+				logger.error("Fatal error in {}", context, e);
+			}
+		};
+	}
+
+	/**
+	 * A fatal error handler that logs all errors to a standard output stream
+	 *
+	 * @see System#out
+	 */
+	public static FatalErrorHandler loggingToSystemOut() {
+		return loggingTo(System.out);
+	}
+
+	/**
+	 * A fatal error handler that logs all errors to a standard error output stream
+	 *
+	 * @see System#err
+	 */
+	public static FatalErrorHandler loggingToSystemErr() {
+		return loggingTo(System.err);
+	}
+
+	/**
+	 * A fatal error handler that logs all errors to a given {@link PrintStream}
+	 *
+	 * @param stream a print stream to log all the received errors
+	 */
+	public static FatalErrorHandler loggingTo(PrintStream stream) {
+		return (e, context) -> {
+			if (context == null) {
+				stream.println("Fatal error");
+			} else {
+				stream.println("Fatal error in " + context);
+			}
+			e.printStackTrace(stream);
+		};
+	}
+}

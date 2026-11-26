@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>com.zhouda</groupId>
+    <artifactId>zhouda-rpc</artifactId>
+    <version>1.0.0</version>
+  </parent>
+
+  <artifactId>rpc-csp</artifactId>
+  <name>Zhouda RPC : CSP</name>
+  <description>Communicating sequential processes through channels.</description>
+  <properties>
+    <jpms.module.name>com.zhouda.rpc.csp</jpms.module.name>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>com.zhouda</groupId>
+      <artifactId>rpc-net</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>com.zhouda</groupId>
+      <artifactId>rpc-serializer</artifactId>
+      <version>${project.version}</version>
+    </dependency>
+    <dependency>
+      <groupId>org.lz4</groupId>
+      <artifactId>lz4-java</artifactId>
+      <optional>true</optional>
+    </dependency>
+  </dependencies>
+</project>
